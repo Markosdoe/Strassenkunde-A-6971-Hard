@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Address GeoGuessr</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    
+    <!-- Satellitenkarte von OpenStreetMap -->
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: Arial, sans-serif;
+        }
+
+        .info-panel {
+            position: fixed;
+            top: 100px;
+            right: 20px;
+            background: rgba(0,0,0,0.85);
+            color: white;
+            padding: 15px;
+            border-radius: 10px;
+            min-width: 220px;
+            z-index: 10000;
+        }
+
+        .distance {
+            font-size: 28px;
+            font-weight: bold;
+            color: #ffd700;
+        }
+        
+        #game-container {
+            position: relative;
+            height: 100vh;
+            width: 100%;
+        }
+        
+        #map {
+            height: 100%;
+            width: 100%;
+        }
+        
+        .overlay {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            right: 20px;
+            z-index: 1000;
+            pointer-events: none;
+        }
+        
+        .title-card {
+            background: rgba(0,0,0,0.85);
+            color: white;
+            padding: 15px 25px;
+            border-radius: 10px;
+            text-align: center;
+            max-width: 500px;
+            margin: 0 auto;
+            backdrop-filter: blur(10px);
+            pointer-events: auto;
+        }
+        
+        .title-card h2 {
+            margin: 0;
+            font-size: 1.2em;
+        }
+        
+        .title-card h1 {
+            margin: 10px 0 0 0;
+            font-size: 1.5em;
+            color: #ffd700;
+        }
+        
+        .controls {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            right: 20px;
+            z-index: 1000;
+            text-align: center;
+            pointer-events: none;
+        }
+        
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            font-size: 16px;
+            border-radius: 8px;
+            cursor: pointer;
+            margin: 0 10px;
+            pointer-events: auto;
+            font-weight: bold;
+        }
+        
+        button:hover {
+            background: #0056b3;
+        }
+        
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        
+        .info-panel {
+            position: absolute;
+            top: 100px;
+            right: 20px;
+            background: rgba(0,0,0,0.85);
+            color: white;
+            padding: 15px;
+            border-radius: 10px;
+            min-width: 200px;
+            backdrop-filter: blur(10px);
+            pointer-events: auto;
+            font-size: 14px;
+        }
+        
+        .distance {
+            font-size: 24px;
+            font-weight: bold;
+            color: #ffd700;
+        }
+        
+        .correct-badge {
+            position: absolute;
+            bottom: 100px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0,0,0,0.9);
+            color: #4caf50;
+            padding: 20px 40px;
+            border-radius: 15px;
+            text-align: center;
+            z-index: 1000;
+            pointer-events: none;
+            animation: fadeIn 0.5s;
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateX(-50%) translateY(20px); }
+            to { opacity: 1; transform: translateX(-50%) translateY(0); }
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <div id="map"></div>
+        
+        <div class="overlay">
+            <div class="title-card">
+                <h2>📍 Finde diese Adresse:</h2>
+                <h1 id="targetAddress">Lade...</h1>
+            </div>
+        </div>
+        
+        <div class="info-panel" id="infoPanel" style="display: none;">
+            <div>📏 Deine Distanz:</div>
+            <div class="distance" id="distance">0</div>
+            <div>Meter</div>
+            <hr style="margin: 10px 0;">
+            <div>🎯 Richtige Adresse:</div>
+            <div id="correctAddress" style="font-size: 12px; margin-top: 5px;"></div>
+        </div>
+        
+        <div class="controls">
+            <button id="guessBtn" onclick="submitGuess()">📍 Tipp abgeben</button>
+            <button id="newGameBtn" onclick="startNewGame()">🔄 Neue Runde</button>
+        </div>
+    </div>
+
+    <script>
+        let map;
+        let marker;
+        let guessMarker;
+        let line = null;
+        let correctMarker;
+        let currentGuess = null;
+        let gameActive = true;
+        let currentTarget = null;
+        
+        
+        // Startposition: Badgasse 7, Hard
+        const START_LAT = 47.4923;
+        const START_LON = 9.6908;
+        
+        // Initialisiere Karte
+        function initMap() {
+            map = L.map('map').setView([START_LAT, START_LON], 16);
+            
+           L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {attribution: '&copy; Esri World Imagery'}).addTo(map);
+
+            
+    // Klick-Listener für Tipps
+   map.on('click', function(e) {
+
+    if (!currentTarget) return;
+
+    const guess = e.latlng;
+
+    currentGuess = {
+        lat: guess.lat,
+        lon: guess.lng
+    };
+
+    // Marker setzen
+    if (guessMarker) map.removeLayer(guessMarker);
+
+    guessMarker = L.marker([guess.lat, guess.lng])
+        .addTo(map)
+        .bindPopup("📍 Dein Tipp")
+        .openPopup();
+});
+        }
+        
+        // Neues Spiel starten
+        async function startNewGame() {
+            gameActive = true;
+            currentGuess = null;
+            
+            // Lösche alle Marker außer Start
+            if (guessMarker) map.removeLayer(guessMarker);
+            if (line) map.removeLayer(line); line = null
+            if (correctMarker) map.removeLayer(correctMarker);
+            
+            
+            
+            
+            // Verstecke Info-Panel
+            document.getElementById('infoPanel').style.display = 'none';
+            document.getElementById('guessBtn').disabled = false;
+            
+            // Lade neue Adresse
+            try {
+                const response = await fetch('/new_game');
+                const data = await response.json();
+                
+                if (data.error) {
+                    alert(data.error);
+                    return;
+                }
+                
+                currentTarget = data;
+                document.getElementById('targetAddress').innerHTML = data.target_name;
+                
+                // Optional: Karte auf Startposition zentrieren
+                map.setView([START_LAT, START_LON], 16);
+                
+            } catch (error) {
+                console.error('Error:', error);
+                alert('Fehler beim Laden des Spiels');
+            }
+        }
+        
+        // Tipp abgeben
+        async function submitGuess() {
+            if (!gameActive) {
+                alert('Spiel ist schon vorbei! Starte eine neue Runde.');
+                return;
+            }
+            
+            if (!currentGuess) {
+                alert('Klicke zuerst auf die Karte, um deinen Tipp zu setzen!');
+                return;
+            }
+            
+            gameActive = false;
+            document.getElementById('guessBtn').disabled = true;
+            
+            try {
+                const response = await fetch('/check_guess', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        lat: currentGuess.lat,
+                        lon: currentGuess.lon
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.error) {
+                    alert(data.error);
+                    gameActive = true;
+                    document.getElementById('guessBtn').disabled = false;
+                    return;
+                }
+                
+                // Zeige grünen Pin für richtige Position
+                correctMarker = L.marker([data.correct_lat, data.correct_lon], {
+                    icon: L.divIcon({
+                        className: 'custom-div-icon',
+                        html: '✅',
+                        iconSize: [30, 30],
+                        popupAnchor: [0, -15]
+                    })
+                }).addTo(map);
+                correctMarker.bindPopup(`✅ Richtige Adresse:<br>${data.correct_name}`).openPopup();
+                
+                // Zeige Info-Panel mit Distanz
+                document.getElementById('distance').innerHTML = data.distance;
+                document.getElementById('correctAddress').innerHTML = data.correct_name;
+                document.getElementById('infoPanel').style.display = 'block';
+                
+                // Zeichne Linie zwischen Tipp und richtiger Position
+                const linePoints = [
+                    [currentGuess.lat, currentGuess.lon],
+                    [data.correct_lat, data.correct_lon]
+                ];
+                line = L.polyline(linePoints, { color: 'blue', weight: 2, opacity: 0.5 }).addTo(map);
+                
+                // Zentriere Karte auf beide Punkte
+                const bounds = L.latLngBounds(linePoints);
+                map.fitBounds(bounds, { padding: [50, 50] });
+                
+                // Speichere Line für spätere Löschung
+                window.currentLine = line;
+                
+            } catch (error) {
+                console.error('Error:', error);
+                alert('Fehler beim Überprüfen');
+                gameActive = true;
+                document.getElementById('guessBtn').disabled = false;
+            }
+        }
+        
+        // Karte initialisieren und Spiel starten
+        window.onload = () => {
+            initMap();
+            startNewGame();
+        };
+    </script>
+</body>
+</html>

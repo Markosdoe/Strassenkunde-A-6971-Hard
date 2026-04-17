@@ -1,0 +1,6 @@
+services:
+  - type: web
+    name: address-geoguessr
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn "Straßenkunde app:app"
